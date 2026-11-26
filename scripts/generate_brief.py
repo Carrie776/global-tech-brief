@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import time
 from pathlib import Path
 from google import genai
 from google.genai import types
@@ -189,15 +190,39 @@ def main():
     )
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=RESPONSE_SCHEMA,
-            temperature=0.1,
-        ),
-    )
+    fallback_models = [model_name, "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+    models_to_try = list(dict.fromkeys(fallback_models))
+
+    response = None
+    last_err = None
+    for model in models_to_try:
+        for attempt in range(1, 4):
+            try:
+                print(f"[generate_brief] Calling {model} (attempt {attempt}/3)...")
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=RESPONSE_SCHEMA,
+                        temperature=0.1,
+                    ),
+                )
+                break
+            except Exception as exc:
+                last_err = exc
+                err_msg = str(exc)
+                if "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
+                    wait_sec = 15 * attempt
+                    print(f"[generate_brief] {model} busy, waiting {wait_sec}s...")
+                    time.sleep(wait_sec)
+                else:
+                    raise
+        if response is not None:
+            break
+
+    if response is None:
+        raise RuntimeError("All models failed after retries") from last_err
 
     result = json.loads(response.text)
     meta = candidates["meta"]
