@@ -190,7 +190,7 @@ def main():
     )
 
     client = genai.Client(api_key=api_key)
-    fallback_models = [model_name, "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+    fallback_models = [model_name, "gemini-3.5-flash-lite", "gemini-2.5-pro"]
     models_to_try = list(dict.fromkeys(fallback_models))
 
     response = None
@@ -212,6 +212,9 @@ def main():
             except Exception as exc:
                 last_err = exc
                 err_msg = str(exc)
+                if "404" in err_msg or "NOT_FOUND" in err_msg:
+                    print(f"[generate_brief] {model} unavailable (404), skipping to next model...")
+                    break
                 if "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
                     wait_sec = 15 * attempt
                     print(f"[generate_brief] {model} busy, waiting {wait_sec}s...")
