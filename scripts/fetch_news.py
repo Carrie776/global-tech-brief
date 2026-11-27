@@ -13,18 +13,21 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
 try:
-    from googlenewsdecoder import new_decoderv1
+    from googlenewsdecoder import gnewsdecoder as _gnews_decode
 except Exception:
-    new_decoderv1 = None
+    try:
+        from googlenewsdecoder import new_decoderv1 as _gnews_decode
+    except Exception:
+        _gnews_decode = None
 
 
 def decode_gnews_url(url: str) -> str:
     """Resolve Google News RSS redirect URLs to real publisher URLs."""
-    if not url or "news.google.com/rss/articles/" not in url or new_decoderv1 is None:
+    if not url or "news.google.com/rss/articles/" not in url or _gnews_decode is None:
         return url
     try:
-        res = new_decoderv1(url, interval=0)
-        if isinstance(res, dict) and res.get("status") and res.get("decoded_url"):
+        res = _gnews_decode(url)
+        if isinstance(res, dict) and (res.get("success") or res.get("status")) and res.get("decoded_url"):
             decoded = res["decoded_url"].strip()
             if decoded.startswith("http"):
                 return decoded
@@ -322,7 +325,7 @@ def main():
     all_items.extend(output["theme_supplement"])
 
     gnews_items = [it for it in all_items if "news.google.com/rss/articles/" in it.get("url", "")]
-    if gnews_items and new_decoderv1 is not None:
+    if gnews_items and _gnews_decode is not None:
         print(f"[fetch_news] Decoding {len(gnews_items)} Google News URLs to direct publisher URLs...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             decoded_urls = list(pool.map(decode_gnews_url, [it["url"] for it in gnews_items]))
