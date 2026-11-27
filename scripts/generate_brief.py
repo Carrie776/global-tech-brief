@@ -31,12 +31,13 @@ RESPONSE_SCHEMA = {
             "items": {
                 "type": "OBJECT",
                 "properties": {
+                    "cid": {"type": "STRING"},
                     "title": {"type": "STRING"},
                     "bullets": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "source_label": {"type": "STRING"},
                     "url": {"type": "STRING"},
                 },
-                "required": ["title", "bullets", "source_label", "url"],
+                "required": ["cid", "title", "bullets", "source_label", "url"],
             },
         },
         "sections": {
@@ -51,12 +52,13 @@ RESPONSE_SCHEMA = {
                         "items": {
                             "type": "OBJECT",
                             "properties": {
+                                "cid": {"type": "STRING"},
                                 "title": {"type": "STRING"},
                                 "bullets": {"type": "ARRAY", "items": {"type": "STRING"}},
                                 "source_label": {"type": "STRING"},
                                 "url": {"type": "STRING"},
                             },
-                            "required": ["title", "bullets", "source_label", "url"],
+                            "required": ["cid", "title", "bullets", "source_label", "url"],
                         },
                     },
                 },
@@ -185,6 +187,7 @@ def main():
 
     prompt = (
         f"{rules}\n\n"
+        f"重要补充要求：每条候选新闻都带有唯一编号 `cid`（如 `C001`）。你在输出 JSON 的每一条新闻中，必须原样填写对应的 `cid`，严禁修改或编造 `cid` 与链接。\n\n"
         f"以下是本期抓取到的候选新闻 JSON，请严格按规则筛选、核验、去重并输出 JSON：\n"
         f"{json.dumps(candidates, ensure_ascii=False)}"
     )
@@ -228,6 +231,34 @@ def main():
         raise RuntimeError("All models failed after retries") from last_err
 
     result = json.loads(response.text)
+
+    # 用候选原始 cid 强还原真实 URL，彻底杜绝大模型复制长链接漏字/错字导致重定向无效
+    cid_to_url = {}
+    for o in candidates.get("outlets", []):
+        for it in o.get("candidates", []):
+            if it.get("cid") and it.get("url"):
+                cid_to_url[it["cid"]] = it["url"]
+    for it in candidates.get("theme_supplement", []):
+        if it.get("cid") and it.get("url"):
+            cid_to_url[it["cid"]] = it["url"]
+
+    fixed_urls = 0
+    for it in result.get("focus_items", []):
+        real_u = cid_to_url.get(it.get("cid", ""))
+        if real_u:
+            if it.get("url") != real_u:
+                fixed_urls += 1
+            it["url"] = real_u
+    for sec in result.get("sections", []):
+        for it in sec.get("items", []):
+            real_u = cid_to_url.get(it.get("cid", ""))
+            if real_u:
+                if it.get("url") != real_u:
+                    fixed_urls += 1
+                it["url"] = real_u
+    if fixed_urls:
+        print(f"[generate_brief] Restored {fixed_urls} exact URLs via cid mapping.")
+
     meta = candidates["meta"]
     issue_date_iso = meta["issue_date_la"]
 

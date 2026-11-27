@@ -4,3 +4,4 @@ requests>=2.32.0
 beautifulsoup4>=4.12.3
 python-dateutil>=2.9.0
 tzdata>=2024.1
+googlenewsdecoder>=0.2.0

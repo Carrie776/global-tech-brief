@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import os
 import re
@@ -10,6 +11,26 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
+
+try:
+    from googlenewsdecoder import new_decoderv1
+except Exception:
+    new_decoderv1 = None
+
+
+def decode_gnews_url(url: str) -> str:
+    """Resolve Google News RSS redirect URLs to real publisher URLs."""
+    if not url or "news.google.com/rss/articles/" not in url or new_decoderv1 is None:
+        return url
+    try:
+        res = new_decoderv1(url, interval=0)
+        if isinstance(res, dict) and res.get("status") and res.get("decoded_url"):
+            decoded = res["decoded_url"].strip()
+            if decoded.startswith("http"):
+                return decoded
+    except Exception:
+        pass
+    return url
 
 HEADERS = {
     "User-Agent": (
@@ -293,6 +314,46 @@ def main():
         for item in items[:6]:
             output["theme_supplement"].append(item)
         time.sleep(0.3)
+
+    # 统一将 Google News 跳转链解码为原媒体直链，并分配短编号 cid（防止大模型复制长链接出错）
+    all_items = []
+    for o in output["outlets"]:
+        all_items.extend(o["candidates"])
+    all_items.extend(output["theme_supplement"])
+
+    gnews_items = [it for it in all_items if "news.google.com/rss/articles/" in it.get("url", "")]
+    if gnews_items and new_decoderv1 is not None:
+        print(f"[fetch_news] Decoding {len(gnews_items)} Google News URLs to direct publisher URLs...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            decoded_urls = list(pool.map(decode_gnews_url, [it["url"] for it in gnews_items]))
+        decoded_ok = 0
+        for it, new_u in zip(gnews_items, decoded_urls):
+            if new_u != it["url"]:
+                it["url"] = new_u
+                decoded_ok += 1
+        print(f"[fetch_news] Decoded {decoded_ok}/{len(gnews_items)} Google News URLs.")
+
+    # 剔除可能解码后落到被排除域名（如 tomshardware.com）的条目，并分配短 ID
+    cid_idx = 1
+    for o in output["outlets"]:
+        filtered = []
+        for it in o["candidates"]:
+            if "tomshardware.com" in it.get("url", "").lower():
+                continue
+            it["cid"] = f"C{cid_idx:03d}"
+            cid_idx += 1
+            filtered.append(it)
+        o["candidates"] = filtered
+        o["candidate_count"] = len(filtered)
+
+    filtered_theme = []
+    for it in output["theme_supplement"]:
+        if "tomshardware.com" in it.get("url", "").lower():
+            continue
+        it["cid"] = f"C{cid_idx:03d}"
+        cid_idx += 1
+        filtered_theme.append(it)
+    output["theme_supplement"] = filtered_theme
 
     os.makedirs("data", exist_ok=True)
     with open("data/candidates.json", "w", encoding="utf-8") as f:
